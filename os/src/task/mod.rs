@@ -182,11 +182,11 @@ pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
 }
-/// emm
+/// Get syscall counts
 pub  fn get_syscall_counts(syscall_id:usize) -> usize{
     TASK_MANAGER.get_syscall_counts(syscall_id)
 }
-/// emm
+/// Add syscall counts
 pub fn add_syscall_counts(syscall_id:usize) {
     TASK_MANAGER.add_syscall_counts(syscall_id);
 }
