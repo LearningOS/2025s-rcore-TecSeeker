@@ -1,6 +1,8 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
 
-use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
+use crate::config::PAGE_SIZE_BITS;
+
+use super::{frame_alloc, AccessType, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
@@ -178,4 +180,30 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
         start = end_va.into();
     }
     v
+}
+
+/// Translate virt addr ptr to pysc addr ptr
+pub fn translated_pa<T>(token: usize, ptr: *const T, access: AccessType) -> Option<*mut T> {
+    let page_table: PageTable = PageTable::from_token(token);
+    let addr: usize = ptr as usize;
+    let va: VirtAddr = VirtAddr::from(addr);
+    let vpn: VirtPageNum = va.floor();
+
+    if let Some(pte) = page_table.translate(vpn) {
+        let flags: PTEFlags = pte.flags();
+
+        let has_user: bool = flags.contains(PTEFlags::U);
+        let has_access: bool = match access {
+            AccessType::Read => flags.contains(PTEFlags::R),
+            AccessType::Write => flags.contains(PTEFlags::W),
+        };
+
+        if has_user && has_access {
+            let ppn_val: usize = pte.ppn().0;
+            let offset: usize = va.page_offset();
+            let pa: usize = (ppn_val << PAGE_SIZE_BITS) | offset;
+            return  Some(pa as *mut T);
+        }
+    }
+    None
 }

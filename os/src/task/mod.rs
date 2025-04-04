@@ -114,6 +114,28 @@ impl TaskManager {
             .find(|id| inner.tasks[*id].task_status == TaskStatus::Ready)
     }
 
+    /// Get current task's syscall count
+    fn get_syscall_count(&self, syscall_id: usize) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current]
+            .syscall_counts
+            .get(&syscall_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Add current task's syscall count
+    fn add_syscall_count(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current]
+            .syscall_counts
+            .entry(syscall_id)
+            .and_modify(|count| *count += 1)
+            .or_insert(1);
+    }
+
     /// Get the current 'Running' task's token.
     fn get_current_token(&self) -> usize {
         let inner = self.inner.exclusive_access();
@@ -153,6 +175,20 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Mmap fucntion
+    fn mmap(&self, _start: usize, _len: usize, _prot: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.mmap(_start, _len, _prot)
+    }
+
+    /// Munmap function
+    pub fn munmap(&self, start: usize, len: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.munmap(start, len)
+    }
 }
 
 /// Run the first task in task list.
@@ -188,6 +224,16 @@ pub fn exit_current_and_run_next() {
     run_next_task();
 }
 
+/// Get current task's syscall count
+pub fn get_syscall_count(syscall_id: usize) -> usize {
+    TASK_MANAGER.get_syscall_count(syscall_id)
+}
+
+/// Add current task's syscall count
+pub fn add_syscall_count(syscall_id: usize) {
+    TASK_MANAGER.add_syscall_count(syscall_id);
+}
+
 /// Get the current 'Running' task's token.
 pub fn current_user_token() -> usize {
     TASK_MANAGER.get_current_token()
@@ -201,4 +247,13 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Mmap function
+pub fn mmap(_start: usize, _len: usize, _prot: usize) -> isize {
+    TASK_MANAGER.mmap(_start, _len, _prot)
+}
+/// Munmap function
+pub fn munmap(start: usize, len: usize) -> isize {
+    TASK_MANAGER.munmap(start, len)
 }
