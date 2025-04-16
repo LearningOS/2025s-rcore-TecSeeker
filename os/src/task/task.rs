@@ -36,6 +36,75 @@ impl TaskControlBlock {
         let inner = self.inner_exclusive_access();
         inner.memory_set.token()
     }
+    /// Spawn from elf
+    pub fn spawn_from_elf(
+        parent: &Arc<TaskControlBlock>,
+        elf_data: &[u8],
+    ) -> Arc<TaskControlBlock> {
+        // 1. Create memory mapping and parse ELF
+        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+
+        // 2. Get the physical page number of the trap context
+        let trap_cx_ppn = memory_set
+            .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
+            .unwrap()
+            .ppn();
+
+        // 3. Allocate PID and kernel stack
+        let pid_handle = pid_alloc();
+        let kernel_stack = kstack_alloc();
+        let kernel_stack_top = kernel_stack.get_top();
+
+        // 4. Copy the file descriptor table from the parent
+        let parent_inner = parent.inner_exclusive_access();
+        let mut new_fd_table: Vec<Option<Arc<dyn File + Send + Sync>>> = Vec::new();
+        for fd in parent_inner.fd_table.iter() {
+            new_fd_table.push(fd.clone());
+        }
+
+        // 5. Construct the new task control block
+        let task_control_block = Arc::new(TaskControlBlock {
+            pid: pid_handle,
+            kernel_stack,
+            inner: unsafe {
+                UPSafeCell::new(TaskControlBlockInner {
+                    trap_cx_ppn,
+                    base_size: user_sp,
+                    task_cx: TaskContext::goto_trap_return(kernel_stack_top),
+                    task_status: TaskStatus::Ready,
+                    memory_set,
+                    parent: Some(Arc::downgrade(parent)),
+                    children: Vec::new(),
+                    exit_code: 0,
+                    heap_bottom: user_sp,
+                    program_brk: user_sp,
+                    stride: 0,
+                    priority: parent_inner.priority,
+                    fd_table: new_fd_table,
+                })
+            },
+        });
+
+        drop(parent_inner); // Release the lock early to avoid deadlock
+
+        // 6. Initialize the trap context for the child process
+        let trap_cx = task_control_block.inner_exclusive_access().get_trap_cx();
+        *trap_cx = TrapContext::app_init_context(
+            entry_point,
+            user_sp,
+            KERNEL_SPACE.exclusive_access().token(),
+            kernel_stack_top,
+            trap_handler as usize,
+        );
+
+        // 7. Add the new process to the parent's list of children
+        parent
+            .inner_exclusive_access()
+            .children
+            .push(task_control_block.clone());
+
+        task_control_block
+    }
 }
 
 pub struct TaskControlBlockInner {
@@ -71,6 +140,12 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// priority
+    pub priority: usize,
+
+    /// stride
+    pub stride: usize,
 }
 
 impl TaskControlBlockInner {
@@ -135,6 +210,8 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    priority: 16,
+                    stride: 0,
                 })
             },
         };
@@ -216,6 +293,8 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    priority: 16,
+                    stride: 0,
                 })
             },
         });
