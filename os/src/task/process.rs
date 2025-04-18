@@ -1,12 +1,14 @@
 //! Implementation of  [`ProcessControlBlock`]
 
-use super::id::RecycleAllocator;
+use super::id::{RecycleAllocator, TaskUserRes};
 use super::manager::insert_into_pid2process;
-use super::TaskControlBlock;
-use super::{add_task, SignalFlags};
+use super::task::TaskControlBlockInner;
+use super::{add_task, SignalFlags, TaskContext, TaskStatus};
+use super::{kstack_alloc, TaskControlBlock};
 use super::{pid_alloc, PidHandle};
+use crate::config::TRAP_CONTEXT_BASE;
 use crate::fs::{File, Stdin, Stdout};
-use crate::mm::{translated_refmut, MemorySet, KERNEL_SPACE};
+use crate::mm::{translated_refmut, MemorySet, VirtAddr, KERNEL_SPACE};
 use crate::sync::{Condvar, Mutex, Semaphore, UPSafeCell};
 use crate::trap::{trap_handler, TrapContext};
 use alloc::string::String;
@@ -282,4 +284,100 @@ impl ProcessControlBlock {
     pub fn getpid(&self) -> usize {
         self.pid.0
     }
+}
+
+/// spawn from elf
+pub fn spawn_from_elf(
+    parent: &Arc<ProcessControlBlock>,
+    elf_data: &[u8],
+) -> Arc<ProcessControlBlock> {
+    // 1. Parse ELF file to create address space (memory set), get user stack pointer and entry point
+    let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+
+    // 2. Allocate PID for the new process
+    let pid_handle = pid_alloc();
+
+    // 3. Copy file descriptor table from parent process
+    let parent_inner = parent.inner_exclusive_access();
+    let mut new_fd_table: Vec<Option<Arc<dyn File + Send + Sync>>> = Vec::new();
+    for fd in parent_inner.fd_table.iter() {
+        new_fd_table.push(fd.clone());
+    }
+
+    // 4. Initialize a new process control block (PCB)
+    let pcb = Arc::new(ProcessControlBlock {
+        pid: pid_handle,
+        inner: unsafe {
+            UPSafeCell::new(ProcessControlBlockInner {
+                is_zombie: false,
+                memory_set,
+                parent: Some(Arc::downgrade(parent)),
+                children: Vec::new(),
+                exit_code: 0,
+                fd_table: new_fd_table,
+                signals: SignalFlags::empty(),
+                tasks: Vec::new(),
+                task_res_allocator: RecycleAllocator::new(),
+                mutex_list: Vec::new(),
+                semaphore_list: Vec::new(),
+                condvar_list: Vec::new(),
+            })
+        },
+    });
+
+    drop(parent_inner); // Release parent's lock early to avoid deadlock
+
+    // 5. Allocate a thread ID (tid) for the first thread
+    let tid = pcb.inner_exclusive_access().task_res_allocator.alloc();
+
+    // 6. Allocate kernel stack for the first thread
+    let kernel_stack = kstack_alloc();
+    let kernel_stack_top = kernel_stack.get_top();
+
+    // 7. Get the physical page number of the trap context in the new process's address space
+    let trap_cx_ppn = pcb
+        .inner_exclusive_access()
+        .memory_set
+        .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
+        .unwrap()
+        .ppn();
+
+    // 8. Create the first thread (TaskControlBlock)
+    let task = Arc::new(TaskControlBlock {
+        process: Arc::downgrade(&pcb),
+        kstack: kernel_stack,
+        inner: unsafe {
+            UPSafeCell::new(TaskControlBlockInner {
+                res: Some(TaskUserRes {
+                    tid,
+                    ustack_base: user_sp,
+                    process: Arc::downgrade(&pcb),
+                }),
+                trap_cx_ppn,
+                task_cx: TaskContext::goto_trap_return(kernel_stack_top),
+                task_status: TaskStatus::Ready,
+                exit_code: None,
+                priority: 16,
+                stride: 0,
+            })
+        },
+    });
+
+    // 9. Initialize trap context for the new thread
+    let trap_cx = task.inner_exclusive_access().get_trap_cx();
+    *trap_cx = TrapContext::app_init_context(
+        entry_point,
+        user_sp,
+        KERNEL_SPACE.exclusive_access().token(),
+        kernel_stack_top,
+        trap_handler as usize,
+    );
+
+    // 10. Insert the new thread into the PCB's task list
+    pcb.inner_exclusive_access().tasks.push(Some(task));
+
+    // 11. Add the new process to the parent's child process list
+    parent.inner_exclusive_access().children.push(pcb.clone());
+
+    pcb
 }

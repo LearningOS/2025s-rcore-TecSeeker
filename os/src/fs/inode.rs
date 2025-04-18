@@ -1,4 +1,4 @@
-use super::File;
+use super::{File, Stat, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
@@ -119,7 +119,29 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
         })
     }
 }
+/// Linkat
+pub fn linkat(old_path: &str, new_path: &str) -> isize {
+    if old_path == new_path {
+        return -1;
+    }
+    let old_inode = ROOT_INODE.find(old_path);
+    if let Some(inode) = old_inode {
+        return ROOT_INODE.link(&inode, new_path);
+    }
+    -1
+}
 
+/// Unlink
+pub fn unlink(path: &str) -> isize {
+    let inode = ROOT_INODE.find(path);
+    if let Some(target_inode) = inode {
+        if target_inode.unlink() == 0 {
+            ROOT_INODE.remove_dir_entry(path);
+        }
+        return 0;
+    }
+    -1
+}
 impl File for OSInode {
     /// file readable?
     fn readable(&self) -> bool {
@@ -156,5 +178,19 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn stat(&self) -> Stat {
+        let inner = self.inner.exclusive_access();
+        let mode = if inner.inode.is_dir() {
+            StatMode::DIR
+        } else {
+            StatMode::FILE
+        };
+        Stat::new(
+            0,
+            inner.inode.get_inode_id().into(),
+            mode,
+            inner.inode.get_link_count(),
+        )
     }
 }
