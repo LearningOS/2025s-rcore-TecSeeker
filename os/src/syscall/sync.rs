@@ -86,10 +86,10 @@ pub fn sys_mutex_lock(mutex_id: usize) -> isize {
             return -0xDEAD;
         }
     } else {
-        process_inner.resource_manager.request_resource(
+        process_inner.resource_manager.alloc_resource(
             tid,
-            crate::sync::ResourceType::Mutex,
             mutex_id,
+            crate::sync::ResourceType::Mutex,
             1,
         );
     }
@@ -117,8 +117,8 @@ pub fn sys_mutex_unlock(mutex_id: usize) -> isize {
     let mut process_inner = process.inner_exclusive_access();
     process_inner.resource_manager.release_resource(
         tid,
-        crate::sync::ResourceType::Mutex,
         mutex_id,
+        crate::sync::ResourceType::Mutex,
         1,
     );
     let mutex = Arc::clone(process_inner.mutex_list[mutex_id].as_ref().unwrap());
@@ -181,8 +181,8 @@ pub fn sys_semaphore_up(sem_id: usize) -> isize {
     let mut process_inner = process.inner_exclusive_access();
     process_inner.resource_manager.release_resource(
         tid,
-        crate::sync::ResourceType::Semaphore(0),
         sem_id,
+        crate::sync::ResourceType::Semaphore(0),
         1,
     );
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
@@ -206,6 +206,7 @@ pub fn sys_semaphore_down(sem_id: usize) -> isize {
     );
     let process = current_process();
     let mut process_inner = process.inner_exclusive_access();
+
     if process_inner.deadlock_detect_enabled {
         if !process_inner.resource_manager.safe_request_resource(
             tid,
@@ -216,7 +217,12 @@ pub fn sys_semaphore_down(sem_id: usize) -> isize {
             return -0xDEAD;
         }
     } else {
-        process_inner.resource_manager.request_resource(tid, crate::sync::ResourceType::Semaphore(0), sem_id, 1);
+        process_inner.resource_manager.alloc_resource(
+            tid,
+            sem_id,
+            crate::sync::ResourceType::Semaphore(0),
+            1
+        );
     }
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
     drop(process_inner);

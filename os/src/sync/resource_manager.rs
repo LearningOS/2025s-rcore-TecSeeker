@@ -1,6 +1,6 @@
+use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
-use alloc::collections::BTreeMap;
 
 /// Resource type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,7 +38,7 @@ pub struct ResourceManager {
 }
 
 impl ResourceManager {
-    /// inilize a ResourceManager
+    /// Create a new empty ResourceManager.
     pub fn new() -> Self {
         Self {
             resource_num: 0,
@@ -97,68 +97,61 @@ impl ResourceManager {
         new_tid
     }
 
-    /// Request resources for a thread
-    pub fn request_resource(
+    /// Check request is safe
+    pub fn safe_request_resource(
         &mut self,
         tid: usize,
         r_type: ResourceType,
         id: usize,
         count: usize,
     ) -> bool {
-        if let Some(rid) = self.get_rid(r_type, id) {
-            if tid > self.max_tid || rid >= self.resource_num {
-                return false; // Illegal request
-            }
-            if self.available[rid] >= count {
-                self.available[rid] -= count;
-                self.records[tid].allocation[rid] += count;
-                self.records[tid].need[rid] = self.records[tid].need[rid].saturating_sub(count);
-                return true;
-            } else {
-                return false;
-            }
-        }
-        false
-    }
-
-    /// Release resources for a thread
-    pub fn release_resource(
-        &mut self,
-        tid: usize,
-        r_type: ResourceType,
-        id: usize,
-        count: usize,
-    ) -> bool {
-        if let Some(rid) = self.get_rid(r_type, id) {
-            if tid > self.max_tid || rid >= self.resource_num {
-                return false;
-            }
-            if self.records[tid].allocation[rid] >= count {
-                self.records[tid].allocation[rid] -= count;
-                self.available[rid] += count;
-                self.records[tid].need[rid] += count;
-                return true;
-            } else {
-                return false;
-            }
-        }
-        false
-    }
-
-    /// Request resource safely: allocate resource and check if system remains safe.
-    /// If not safe, the allocation will be rolled back automatically.
-    pub fn safe_request_resource(&mut self, tid: usize, r_type: ResourceType, id: usize, count: usize) -> bool {
-        if !self.request_resource(tid, r_type, id, count) {
+        self.add_need(tid, id, r_type, count);
+        if !self.is_safe() {
+            self.minus_need(tid, id, r_type, count);
             return false;
         }
-        if self.is_safe() {
-            true
-        } else {
-            self.release_resource(tid, r_type, id, count);
-            false
+        self.alloc_resource(tid, id, r_type, count);
+        true
+    }
+    /// Release resource
+    pub fn release_resource(&mut self, tid: usize, id: usize, r_type: ResourceType, count: usize) {
+        if let Some(rid) = self.get_rid(r_type, id) {
+            if tid > self.max_tid || rid >= self.resource_num {
+                return;
+            }
+            self.records[tid].allocation[rid] -= count;
+            self.available[rid] += count;
+        }
+    }
+    /// Alloc resource
+    pub fn alloc_resource(&mut self, tid: usize, id: usize, r_type: ResourceType, count: usize) {
+        if let Some(rid) = self.get_rid(r_type, id) {
+            if tid > self.max_tid || rid >= self.resource_num || count > self.available[rid]{
+                return;
+            }
+            self.records[tid].need[rid] -= count;
+            self.records[tid].allocation[rid] += count;
+            self.available[rid] -= count;
+        }
+    }
+    fn add_need(&mut self, tid: usize, id: usize, r_type: ResourceType, count: usize) {
+        if let Some(rid) = self.get_rid(r_type, id) {
+            if tid > self.max_tid || rid >= self.resource_num {
+                return;
+            }
+            self.records[tid].need[rid] += count;
         }
     }
 
+    fn minus_need(&mut self, tid: usize, id: usize, r_type: ResourceType, count: usize) {
+        if let Some(rid) = self.get_rid(r_type, id) {
+            if tid > self.max_tid || rid >= self.resource_num {
+                return;
+            }
+            self.records[tid].need[rid] -= count;
+        }
+    }
+    
     /// Helper method: return the real rid
     fn get_rid(&self, r_type: ResourceType, id: usize) -> Option<usize> {
         match r_type {
