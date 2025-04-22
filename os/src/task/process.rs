@@ -9,7 +9,7 @@ use super::{pid_alloc, PidHandle};
 use crate::config::TRAP_CONTEXT_BASE;
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{translated_refmut, MemorySet, VirtAddr, KERNEL_SPACE};
-use crate::sync::{Condvar, Mutex, Semaphore, UPSafeCell};
+use crate::sync::{Condvar, Mutex, ResourceManager, Semaphore, UPSafeCell};
 use crate::trap::{trap_handler, TrapContext};
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
@@ -41,6 +41,10 @@ pub struct ProcessControlBlockInner {
     pub fd_table: Vec<Option<Arc<dyn File + Send + Sync>>>,
     /// signal flags
     pub signals: SignalFlags,
+    /// deadlock detect is enabled
+    pub deadlock_detect_enabled: bool,
+    /// resource manager
+    pub resource_manager: ResourceManager,
     /// tasks(also known as threads)
     pub tasks: Vec<Option<Arc<TaskControlBlock>>>,
     /// task resource allocator
@@ -116,6 +120,8 @@ impl ProcessControlBlock {
                         Some(Arc::new(Stdout)),
                     ],
                     signals: SignalFlags::empty(),
+                    deadlock_detect_enabled: false,
+                    resource_manager: ResourceManager::new(),
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),
                     mutex_list: Vec::new(),
@@ -242,6 +248,8 @@ impl ProcessControlBlock {
                     exit_code: 0,
                     fd_table: new_fd_table,
                     signals: SignalFlags::empty(),
+                    deadlock_detect_enabled: false,
+                    resource_manager: ResourceManager::new(),
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),
                     mutex_list: Vec::new(),
@@ -316,6 +324,8 @@ pub fn spawn_from_elf(
                 exit_code: 0,
                 fd_table: new_fd_table,
                 signals: SignalFlags::empty(),
+                deadlock_detect_enabled: false,
+                resource_manager: ResourceManager::new(),
                 tasks: Vec::new(),
                 task_res_allocator: RecycleAllocator::new(),
                 mutex_list: Vec::new(),

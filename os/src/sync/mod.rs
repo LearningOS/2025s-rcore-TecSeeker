@@ -2,10 +2,12 @@
 
 mod condvar;
 mod mutex;
+mod resource_manager;
 mod semaphore;
 mod up;
 
 pub use condvar::Condvar;
 pub use mutex::{Mutex, MutexBlocking, MutexSpin};
+pub use resource_manager::{ResourceManager, ResourceType};
 pub use semaphore::Semaphore;
 pub use up::UPSafeCell;

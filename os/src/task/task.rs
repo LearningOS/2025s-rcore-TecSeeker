@@ -71,6 +71,9 @@ impl TaskControlBlock {
         let trap_cx_ppn = res.trap_cx_ppn();
         let kstack = kstack_alloc();
         let kstack_top = kstack.get_top();
+
+        let mut process_inner = process.inner_exclusive_access();
+        process_inner.resource_manager.add_thread();
         Self {
             process: Arc::downgrade(&process),
             kstack,
